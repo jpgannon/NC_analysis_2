@@ -1,0 +1,115 @@
+---
+title: "NC analysis #2"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(tidyverse)
+library(dataRetrieval)
+```
+
+
+```{r}
+###Read Gage IDs
+IDs <- read_csv("gages_and_info.csv")
+IDs$ID <- paste("0",as.character(IDs$ID), sep = '')
+
+#read gage info #DRAIN_SQKM is size
+info <- read_csv("USGS_gage_characteristics.csv")
+info$ID <- paste("0", as.character(info$ID), sep = '')
+infowss <- select(info, ID, DRAIN_SQKM)
+colnames(infowss) <- c("site","drain_sqkm")
+
+#gather data from USGS
+gage <- IDs$ID
+parameter <- "00060"
+start <- "2010-01-01"
+end <- "2013-01-01"
+Qcfs <- readNWISuv(gage, parameter, start, end)
+
+#clean up and format
+Qcfs <- Qcfs[,-c(1,5,6)]
+colnames(Qcfs) <- c("site","dateTime","Qcfs")
+Qcfs$dateTime <- as.POSIXct(Qcfs$dateTime, format = "%Y-%m-%d %H:%M:%S")
+
+#add column with watershed size
+Qcfs <- left_join(Qcfs, infowss, by = "site")
+
+#add column with region and name
+#trim IDs
+IDs2 <- select(IDs, ID, site_name, region)
+colnames(IDs2)[1] <- "site"
+Qcfs <- left_join(Qcfs, IDs2, by = "site")
+
+#calculate watershed normalized discharge
+# cfs to mmd 
+cfs_km3d <- 86400 / 35310000000 #1 ft3/sec in km^3/day
+
+km3Pday <- Qcfs$Qcfs * cfs_km3d #discharge in km^3/day
+
+kmPday <- km3Pday/Qcfs$drain_sqkm #in km/day
+
+mmd <- kmPday * 1000000 #in mmd
+
+Qcfs$Qmmd <- mmd #add column to data
+
+```
+
+```{r}
+#check with plot
+ggplot(data = Qcfs, mapping = aes(x = dateTime, y = Qmmd, color = site))+
+  geom_line()+
+  facet_grid(region~.)+
+  theme_classic()+
+  theme(legend.position = "none")
+```
+
+Compute top n Maximum daily values
+```{r}
+qmaxdaily <- aggregate(Qcfs, 
+                      list(day = cut(Qcfs$dateTime, breaks="day"), Qcfs$site), 
+                      max, na.rm = TRUE)
+qmaxdaily$day <- as.POSIXct(qmaxdaily$day, format = "%Y-%m-%d")
+
+top10 <- qmaxdaily %>% group_by(site) %>% top_n(n = 5, wt = Qmmd)
+
+```
+look at plots
+```{r}
+ggplot(data = top10, mapping = aes(x = day, y = Qmmd, color = site))+
+  geom_point()+
+  facet_grid(region~.)+
+  theme_classic()+
+  theme(legend.position = "none")
+
+ggplot(data = top10, mapping = aes(x = region, y = Qmmd))+
+  geom_boxplot()+
+  theme_classic()
+  
+```
+Compute max flow for the year
+```{r}
+qmaxweek <- aggregate(Qcfs, 
+                      list(week = cut(Qcfs$dateTime, breaks="week"), Qcfs$site), 
+                      max, na.rm = TRUE)
+qmaxweek$week <- as.POSIXct(qmaxweek$week, format = "%Y-%m-%d")
+
+top10wk <- qmaxweek %>% group_by(site) %>% top_n(n = 1, wt = Qmmd)
+```
+
+```{r}
+ggplot(data = top10wk, mapping = aes(x = week, y = Qmmd, color = site))+
+  geom_point()+
+  facet_grid(region~.)+
+  theme_classic()+
+  theme(legend.position = "none")
+
+ggplot(data = top10wk, mapping = aes(x = region, y = Qmmd))+
+  geom_boxplot()+
+  theme_classic()
+  
+```

@@ -1,0 +1,67 @@
+---
+title: "Yearly peak flows"
+output: html_notebook
+---
+```{r}
+library(tidyverse)
+library(dataRetrieval)
+```
+
+
+```{r}
+###Read Gage IDs
+IDs <- read_csv("gages_and_info.csv")
+IDs$ID <- paste("0",as.character(IDs$ID), sep = '')
+
+#read gage info #DRAIN_SQKM is size
+info <- read_csv("USGS_gage_characteristics.csv")
+info$ID <- paste("0", as.character(info$ID), sep = '')
+infowss <- select(info, ID, DRAIN_SQKM)
+colnames(infowss) <- c("site","drain_sqkm")
+
+#gather data from USGS
+gage <- IDs$ID
+parameter <- "00060"
+start <- "1990-01-01"
+end <- "2018-01-01"
+Qcfs <- readNWISpeak(gage, start, end)
+
+#clean up and format
+Qcfs <- Qcfs[,c(2,3,5)]
+colnames(Qcfs) <- c("site","dateTime","Qcfs")
+Qcfs$dateTime <- as.POSIXct(Qcfs$dateTime, format = "%Y-%m-%d")
+
+#add column with watershed size
+Qcfs <- left_join(Qcfs, infowss, by = "site")
+
+#add column with region and name
+#trim IDs
+IDs2 <- select(IDs, ID, site_name, region)
+colnames(IDs2)[1] <- "site"
+Qcfs <- left_join(Qcfs, IDs2, by = "site")
+
+#calculate watershed normalized discharge
+# cfs to mmd 
+cfs_km3d <- 86400 / 35310000000 #1 ft3/sec in km^3/day
+
+km3Pday <- Qcfs$Qcfs * cfs_km3d #discharge in km^3/day
+
+kmPday <- km3Pday/Qcfs$drain_sqkm #in km/day
+
+mmd <- kmPday * 1000000 #in mmd
+
+Qcfs$Qmmd <- mmd #add column to data
+
+```
+
+```{r}
+ggplot(Qcfs, aes(x = region, y = Qmmd))+
+  geom_boxplot()+
+  theme_classic()
+
+ggplot(Qcfs, aes(y = Qmmd, x = dateTime, color = region))+
+  geom_point()+
+  theme_classic()
+```
+
+
